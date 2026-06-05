@@ -1,0 +1,175 @@
+# subband-hos-speech-detection
+
+Code repository for the paper **"Subband Kurtosis and Higher-Order Statistics for Synthetic Speech Detection"** (submitted to IEEE Transactions on Information Forensics and Security).
+
+Author: Sridharan Sankaran
+---
+
+## Repository Structure
+
+```
+subband-hos-speech-detection/
+├── 01_exp1_kurtosis_separability.py   # Experiment 1: Kurtosis separability analysis
+├── 02_exp2_bispectrum_validation.py   # Experiment 2: Bispectrum and bicoherence analysis
+├── 03_exp3_clean_performance.py       # Experiment 3: Clean-condition detection performance
+├── 04_exp4_generalisation.py          # Experiment 4: Zero-shot generalisation to unseen vocoders
+├── 05_exp5_hos_robustness.py          # Experiment 5: Robustness under codec/channel distortion
+├── 06_exp5_figures.py                 # Experiment 5: Figure generation from saved results
+├── 07_exp6_ablation.py                # Experiment 6: Ablation study — feature component contribution
+└── README.md
+```
+
+---
+
+## Experiments
+
+### Experiment 1 — Kurtosis Separability (`01_exp1_kurtosis_separability.py`)
+
+Establishes the statistical discriminability of subband kurtosis between natural and synthetic speech across all 24 gammatone filterbank channels **before any classifier is trained**. Computes Cohen's *d* effect size and Mann-Whitney *U* test with Bonferroni correction for both the fine-structure and envelope kurtosis components.
+
+**Inputs:** `hos_features_train.h5` (25,380 utterances × 2,496 dims, from FTP), ASVspoof 2019 LA train protocol (Google Drive).
+
+**Outputs (FTP):** `exp1_separability.json`, `fig_01_01_cohens_d_heatmap.png`, `fig_01_02_kurtosis_violin.png`, `fig_01_03_kurtosis_meanprofile.png`, `fig_01_04_cohens_d_barplot.png`.
+
+**Key finding:** All 24 envelope kurtosis channels are significant after Bonferroni correction; max *d* = 0.704 at channel 18 (3,802 Hz). Fine-structure kurtosis yields weak separation (max |*d*| = 0.114) due to estimation variance under short frames.
+
+---
+
+### Experiment 2 — Bispectrum Validation (`02_exp2_bispectrum_validation.py`)
+
+Validates the bispectrum diagonal feature by analysing quadratic phase coupling in natural versus synthesised speech using the bicoherence index. Generates 2D bispectrum visualisations (indirect method) and measures estimation variance of the diagonal slice as a function of frame length to justify the 200 ms design choice.
+
+**Inputs:** ASVspoof 2019 LA evaluation partition (Google Drive, 100 bonafide + 100 spoof utterances stratified across all 13 systems).
+
+**Outputs (FTP):** `exp2_bispectrum.json`, `fig_02_01_bispectrum_bonafide.png`, `fig_02_02_bispectrum_spoof.png`, `fig_02_03_bicoherence_boxplot.png`, `fig_02_04_frame_length_variance.png`.
+
+**Key finding:** Synthetic speech consistently exhibits *higher* bicoherence than natural speech across all 24 channels (bonafide/spoof ratio 0.798–0.971), reflecting vocoder deterministic phase regularity.
+
+---
+
+### Experiment 3 — Clean-Condition Performance (`03_exp3_clean_performance.py`)
+
+Evaluates the trained HOS-XGBoost system on the full ASVspoof 2019 LA evaluation partition (71,237 utterances). Reports pooled EER, min-tDCF, per-system EER across all 13 spoofing systems, and XGBoost feature importance decomposed by HOS type and cochlear channel.
+
+**Inputs:** `hos_features_eval_clean.h5` (71,237 × 2,496), `xgb_model.json` (from FTP), ASVspoof 2019 LA eval protocol (Google Drive).
+
+**Outputs (FTP):** `exp3_clean_performance.json`, `fig_03_01_persystem_eer.png`, `fig_03_02_feature_importance.png`, `fig_03_03_importance_by_channel.png`.
+
+**Key finding:** Pooled EER 13.83%, min-tDCF 0.0436. Bispectrum diagonal features account for 78.9% of total classifier gain; dominant individual feature is envelope kurtosis mean at channel 22 (6,906 Hz, gain = 68.38).
+
+---
+
+### Experiment 4 — Zero-Shot Generalisation (`04_exp4_generalisation.py`)
+
+Evaluates the ASVspoof 2019 LA-trained HOS-XGBoost system on LibriSeVoc mini (3,500 utterances: 500 ground-truth + 500 each from six unseen neural vocoders) with no retraining. Per-vocoder EER is computed for DiffWave, MelGAN, Parallel WaveGAN, WaveGrad, WaveNet, and WaveRNN.
+
+**Inputs:** `xgb_model.json` (from FTP), `LibriSeVoc_mini.zip` (Google Drive, directory structure: `gt/`, `diffwave/`, `melgan/`, `parallel_wave_gan/`, `wavegrad/`, `wavenet/`, `wavernn/`).
+
+**Outputs (FTP):** `exp4_generalisation.json`, `fig_04_01_pervocoder_eer.png`, `fig_04_02_generalisation_scatter.png`.
+
+**Key finding:** Pooled EER 41.01% (+27.18 pp generalisation gap). DiffWave is the most detectable unseen vocoder (29.70%); WaveRNN shows inverted polarity (68.91% EER), indicating its RNN-based generation produces statistics closest to natural speech.
+
+---
+
+### Experiment 5 — Robustness (`05_exp5_hos_robustness.py`)
+
+The most computationally intensive experiment. Applies 14 distortion conditions across three regimes to a 5,000-utterance stratified subset of the ASVspoof 2019 LA evaluation partition and evaluates both HOS-XGBoost and an LFCC-GMM baseline on each condition. Fully resumable: features are extracted in batches of 500 utterances with HDF5 checkpointing to both FTP and Google Drive after each batch.
+
+**Distortion conditions:**
+- **Codec:** MP3 at 32/64/128 kbps; Opus at 6/12/24 kbps (Opus requires OGG intermediate container — see note below)
+- **AWGN:** 0/5/10/20 dB SNR
+- **Telephone BPF:** 300–3400 Hz bandpass
+- **Combination:** MP3-32+Telephone, Opus-6+AWGN-10dB, MP3-64+AWGN-5dB
+
+**Inputs:** `ASVspoof-2019-LA.zip` (Google Drive), protocol files (Google Drive).
+
+**Outputs (FTP):** `hos_features_train.h5`, `hos_features_eval_clean.h5`, `hos_features_eval_<cond>.h5` (one per condition), `xgb_model.json`, `lfcc_scores_<cond>.json`, `results_exp5.json`.
+
+**Key finding:** HOS most robust under telephone BPF (ρ = 1.33×); most sensitive to AWGN (ρ up to 3.46×) due to kurtosis Gaussianization. LFCC-GMM degrades uniformly (ρ ≤ 1.38× for non-AWGN conditions), demonstrating complementary failure modes.
+
+> **Note on Opus codec:** FFmpeg cannot mux the libopus codec into a WAV container. The pipeline applies a two-step encode→OGG then decode→WAV round-trip automatically. This affects the `opus_006`, `opus_012`, `opus_024`, and `opus_awgn10` conditions.
+
+---
+
+### Experiment 5 Figures (`06_exp5_figures.py`)
+
+Standalone figure generation script that reads `results_exp5.json` from FTP (or local) and produces all six publication figures for Experiment 5. Run this separately after Experiment 5 completes, or rerun it to regenerate figures without re-extracting features.
+
+**Inputs:** `results_exp5.json`.
+
+**Outputs (FTP):** `fig_06_01_eer_vs_mp3.png`, `fig_06_02_eer_vs_opus.png`, `fig_06_03_eer_vs_awgn.png`, `fig_06_04_degradation_bar.png`, `fig_06_05_eer_heatmap.png`, `fig_06_06_regime_scatter.png`.
+
+---
+
+### Experiment 6 — Ablation Study (`07_exp6_ablation.py`)
+
+Trains seven XGBoost classifiers on feature subsets of the 2,496-dimensional HOS vector and evaluates each on the clean evaluation set and the MP3-32 kbps distorted subset. Identifies the Pareto-optimal feature subset for codec-robust deployment.
+
+**Ablation variants:**
+
+| Variant | Feature subset | Dims |
+|---|---|---|
+| V1 | Fine-structure kurtosis only | 96 |
+| V2 | Envelope kurtosis only | 96 |
+| V3 | Kurtosis fine + envelope | 192 |
+| V4 | Bispectrum diagonal only | 2,304 |
+| V5 | Fine-structure kurtosis + bispectrum | 2,400 |
+| V6 | Envelope kurtosis + bispectrum | 2,400 |
+| V7 | Full system (reference) | 2,496 |
+
+**Inputs:** `hos_features_train.h5`, `hos_features_eval_clean.h5`, `hos_features_eval_mp3_032.h5` (from FTP), protocol files (Google Drive).
+
+**Outputs (FTP):** `exp6_ablation.json`, `fig_06_01_ablation_eer_bar.png`, `fig_06_02_ablation_degradation.png`, `fig_06_03_ablation_summary_table.png`.
+
+**Key finding:** V6 (envelope kurtosis + bispectrum, 2,400 dims) is Pareto-optimal: 14.17% clean EER (vs 13.83% full system) with degradation ratio ρ = 1.12× (vs 2.12× full system) — a 47% reduction in MP3-32 kbps degradation at a cost of 0.34 pp clean EER.
+
+---
+
+## Feature Vector Layout
+
+The HOS feature vector is 2,496-dimensional with a channel-interleaved layout. For each gammatone channel *k* ∈ {0, …, 23}, dimensions `104k` to `104k+103` contain:
+
+| Offset | Content |
+|---|---|
+| `104k + 0:4` | Fine-structure kurtosis (mean, var, p10, p90) |
+| `104k + 4:8` | Envelope kurtosis (mean, var, p10, p90) |
+| `104k + 8:40` | Bispectrum diagonal mean, lags 0–31 |
+| `104k + 40:72` | Bispectrum diagonal p10, lags 0–31 |
+| `104k + 72:104` | Bispectrum diagonal p90, lags 0–31 |
+
+Quick-reference: envelope kurtosis mean for channel *k* = index `104k + 4`; bispectrum diagonal mean at lag *ℓ* for channel *k* = index `104k + 8 + ℓ`.
+
+---
+
+## Data and Checkpoints
+
+**Datasets required:**
+- ASVspoof 2019 LA: `ASVspoof-2019-LA.zip` (7.64 GB) — place in `/content/drive/MyDrive/datasets/`
+- ASVspoof 2019 LA protocols: `ASVspoof2019_LA_cm_protocols/` — place in `/content/drive/MyDrive/datasets/`
+- LibriSeVoc mini: `LibriSeVoc_mini.zip` (3,500 wav files, 7 directories) — place in `/content/drive/MyDrive/datasets/`
+
+**FTP checkpoint server:** All HDF5 feature files, model checkpoints, and JSON results are persisted to an FTP server (configured per-script). Each script is fully resumable from the last checkpoint after a Google Colab session wipe.
+
+**Trained model and results:** The trained XGBoost model (`xgb_model.json`), all HDF5 feature files, and all JSON results files are available from the authors upon request.
+
+---
+
+## Dependencies
+
+All scripts run on Google Colab (CPU runtime). No GPU is required.
+
+```
+numpy
+scipy
+matplotlib
+h5py
+xgboost
+librosa
+soundfile
+tqdm
+```
+
+FFmpeg must be available on the system path (pre-installed on Google Colab) for Experiment 5 distortion generation.
+
+---
+
