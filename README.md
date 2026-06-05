@@ -221,6 +221,5 @@ The script also expects the following datasets in `/content/drive/MyDrive/datase
 - `ASVspoof-2019-LA.zip`
 - `ASVspoof2019_LA_cm_protocols/` (protocol files)
 - `FMA-small.zip` (if needed)
-- `Ballroom/data1.tar.gz` (if needed)
 - `GiantSteps+.zip` and `GiantSteps+.xlsx` (for Experiment 5 feature extraction, if not using cached HDF5)
 - `LibriSeVoc_mini.zip` (for Experiment 4)
