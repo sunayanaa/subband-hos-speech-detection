@@ -1,8 +1,7 @@
 # subband-hos-speech-detection
 
-Code repository for the paper **"Subband Kurtosis and Higher-Order Statistics for Synthetic Speech Detection"** (submitted to IEEE Transactions on Information Forensics and Security).
+Code repository for the paper **"Subband Kurtosis and Higher-Order Statistics for Synthetic Speech Detection"** (submitted to IEEE Transactions on Information Forensics and Security). Author: Sridharan Sankaran
 
-Author: Sridharan Sankaran
 ---
 
 ## Repository Structure
