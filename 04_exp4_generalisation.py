@@ -11,7 +11,7 @@
 #                WaveNet, WaveRNN.
 #
 # INPUT:
-#                  FTP (downloaded):
+#                  Google Drive (downloaded):
 #                    xgb_model.json              — trained HOS-XGBoost model
 #                  Google Drive:
 #                    /content/drive/MyDrive/datasets/LibriSeVoc_mini.zip
@@ -28,7 +28,7 @@
 #
 #                PIPELINE:
 #                  Step 1  Mount Drive; copy zip to local disk; unzip
-#                  Step 2  Download xgb_model.json from FTP
+#                  Step 2  Download xgb_model.json from Google Drive
 #                  Step 3  Extract HOS features for all 3500 utterances
 #                          (saved to HDF5 with close→upload→reopen checkpointing)
 #                  Step 4  Compute pooled EER across all vocoders
@@ -36,12 +36,12 @@
 #                  Step 6  Compare against ASVspoof 2019 LA per-system EER
 #                          to assess generalisation gap
 #                  Step 7  Generate figures and save JSON
-#                  Step 8  Upload all outputs to FTP
+#                  Step 8  Upload all outputs to Google Drive
 #
-# OUTPUT FILES (uploaded to FTP PROJECT_DIR):
+# OUTPUT FILES (uploaded to Google Drive PROJECT_DIR):
 #                  exp4_generalisation.json
 #                      Per-vocoder EER, pooled EER, generalisation gap
-#                  fig_04_01_persystem_eer.png
+#                  fig_04_01_pervocoder_eer.png
 #                      Per-vocoder EER bar chart with ASVspoof comparison
 #                  fig_04_02_generalisation_scatter.png
 #                      Scatter: ASVspoof per-system EER vs LibriSeVoc
@@ -49,7 +49,7 @@
 #
 # GPU Required : NO
 # Dependencies : numpy, scipy, matplotlib, h5py, xgboost, soundfile,
-#                librosa, tqdm, ftplib
+#                librosa, tqdm
 #
 # Change Log   :
 #   v1.0  2026-06-03  Initial version
@@ -64,7 +64,6 @@
 import os
 import json
 import time
-import ftplib
 import shutil
 import zipfile
 import warnings
@@ -84,12 +83,8 @@ from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
-# --- FTP Configuration ---
-FTP_HOST        = "173.225.103.246"
-FTP_PORT        = 2121
-FTP_USER        = "guest"
-FTP_PASS        = "guest"
-FTP_PROJECT_DIR = "."
+# --- Google Drive Configuration ---
+PROJECT_DIR = "/content/drive/MyDrive/paper/Subband_Kurtosis/"  # Persistent storage
 
 # --- Paths ---
 DRIVE_ZIP      = "/content/drive/MyDrive/datasets/LibriSeVoc_mini.zip"
@@ -158,42 +153,53 @@ C_ASVSPOOF   = '#B71C1C'
 C_GT         = '#FF8F00'
 
 # =============================================================================
-# SECTION 1 — FTP Helpers
+# SECTION 1 — Google Drive Helpers
 # =============================================================================
 
-def get_ftp():
-    ftp = ftplib.FTP()
-    ftp.connect(FTP_HOST, FTP_PORT, timeout=30)
-    ftp.login(FTP_USER, FTP_PASS)
-    if FTP_PROJECT_DIR != ".":
-        ftp.cwd(FTP_PROJECT_DIR)
-    return ftp
+def ensure_project_dir():
+    """Create project directory in Google Drive if it doesn't exist."""
+    os.makedirs(PROJECT_DIR, exist_ok=True)
 
-def upload(local_path, remote_name, retries=3):
+def save_to_drive(local_path, remote_name, retries=3):
+    """Copy a local file to Google Drive project folder."""
+    ensure_project_dir()
+    dest_path = os.path.join(PROJECT_DIR, remote_name)
     for attempt in range(retries):
         try:
-            ftp = get_ftp()
-            with open(local_path, "rb") as f:
-                ftp.storbinary(f"STOR {remote_name}", f)
-            ftp.quit()
-            print(f"  FTP ✓ {remote_name}")
+            shutil.copy2(local_path, dest_path)
+            print(f"  [DRIVE OK] {local_path}  →  {dest_path}")
             return
         except Exception as e:
-            print(f"  FTP attempt {attempt+1} failed: {e}")
+            print(f"  [DRIVE FAIL] attempt {attempt+1}: {e}")
             time.sleep(2)
-    print(f"  FTP FAILED: {remote_name}")
+    print(f"  [DRIVE FAILED] {remote_name}")
 
-def download_from_ftp(remote_name, local_path):
+def load_from_drive(remote_name, local_path):
+    """Copy a file from Google Drive project folder to local path."""
     if os.path.exists(local_path):
         print(f"Local found: {remote_name}. Skipping download.")
         return
-    print(f"Downloading {remote_name} from FTP ...")
-    ftp = get_ftp()
-    with open(local_path, "wb") as f:
-        ftp.retrbinary(f"RETR {remote_name}", f.write)
-    ftp.quit()
-    print(f"Downloaded: {remote_name} "
-          f"({os.path.getsize(local_path)/1e6:.1f} MB)")
+    ensure_project_dir()
+    src_path = os.path.join(PROJECT_DIR, remote_name)
+    if os.path.exists(src_path):
+        try:
+            shutil.copy2(src_path, local_path)
+            print(f"  [DRIVE OK] {src_path}  →  {local_path}")
+            size_mb = os.path.getsize(local_path) / 1e6
+            print(f"Downloaded: {remote_name} ({size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"  [DRIVE FAIL] copy from {src_path}: {e}")
+    else:
+        print(f"  [DRIVE MISSING] {src_path} not found")
+
+def list_drive_files():
+    """List files in the Google Drive project directory."""
+    ensure_project_dir()
+    try:
+        return [f for f in os.listdir(PROJECT_DIR) if os.path.isfile(os.path.join(PROJECT_DIR, f))]
+    except Exception as e:
+        print(f"  [DRIVE] Could not list files: {e}")
+        return []
 
 # =============================================================================
 # SECTION 2 — Dataset Preparation
@@ -380,27 +386,20 @@ def extract_hos_features(wav_path):
 def extract_all_features(entries, h5_path):
     """
     Extracts HOS features for all entries.
-    Resumes from HDF5 checkpoint if it exists.
+    Resumes from HDF5 checkpoint if it exists on Drive.
     Returns (X, y, vocoder_labels) arrays.
     """
-    # Recovery
+    # Recovery from Drive
     if not os.path.exists(h5_path):
         remote = os.path.basename(h5_path)
-        try:
-            ftp = get_ftp()
-            ftp_files = ftp.nlst()
-            ftp.quit()
-            if remote in ftp_files:
-                print(f"Recovering {remote} from FTP ...")
-                ftp2 = get_ftp()
-                with open(h5_path, "wb") as f:
-                    ftp2.retrbinary(f"RETR {remote}", f.write)
-                ftp2.quit()
+        drive_files = list_drive_files()
+        if remote in drive_files:
+            print(f"Recovering {remote} from Google Drive ...")
+            load_from_drive(remote, h5_path)
+            if os.path.exists(h5_path):
                 with h5py.File(h5_path, 'r') as hf:
                     n = len(hf.keys())
                 print(f"  Recovered: {n} utterances")
-        except Exception:
-            pass
 
     # Load done IDs
     done_ids = set()
@@ -443,14 +442,11 @@ def extract_all_features(entries, h5_path):
                 hf.close()
                 remote = os.path.basename(h5_path)
                 try:
-                    ftp = get_ftp()
-                    with open(h5_path, "rb") as f:
-                        ftp.storbinary(f"STOR {remote}", f)
-                    ftp.quit()
+                    save_to_drive(h5_path, remote)
                     tqdm.write(f"[H5 checkpoint] {remote} — "
                                f"{len(done_ids) + i + 1} utterances")
                 except Exception as e:
-                    tqdm.write(f"[H5 checkpoint] FTP failed: {e}")
+                    tqdm.write(f"[H5 checkpoint] Drive upload failed: {e}")
                 hf = h5py.File(h5_path, 'a')
                 since_upload = 0
     finally:
@@ -601,7 +597,7 @@ def fig_generalisation_scatter(per_vocoder_eers, out_path):
 
 def main():
     print("=" * 65)
-    print("04_exp4_generalisation_v01.py")
+    print("04_exp4_generalisation.py")
     print("Experiment 4 — Zero-Shot Generalisation to Unseen Vocoders")
     print("=" * 65)
 
@@ -617,11 +613,11 @@ def main():
     entries = build_file_list()
 
     # ------------------------------------------------------------------
-    # Step 2: Download XGBoost model from FTP
+    # Step 2: Download XGBoost model from Google Drive
     # ------------------------------------------------------------------
-    print("\nStep 2: Downloading model from FTP ...")
+    print("\nStep 2: Downloading model from Google Drive ...")
     model_local = os.path.join(LOCAL_CKPT, "xgb_model.json")
-    download_from_ftp("xgb_model.json", model_local)
+    load_from_drive("xgb_model.json", model_local)
 
     clf = xgb.XGBClassifier()
     clf.load_model(model_local)
@@ -637,7 +633,7 @@ def main():
           f"(bonafide={(y==0).sum()}, spoof={(y==1).sum()})")
 
     # Final upload of complete HDF5
-    upload(h5_path, "hos_features_librisevoc.h5")
+    save_to_drive(h5_path, "hos_features_librisevoc.h5")
 
     # ------------------------------------------------------------------
     # Step 4: Score all utterances
@@ -734,15 +730,20 @@ def main():
         os.path.join(LOCAL_OUT, "fig_04_02_generalisation_scatter.png"))
 
     # ------------------------------------------------------------------
-    # Step 9: Upload all to FTP
+    # Step 9: Upload all to Google Drive
     # ------------------------------------------------------------------
-    print("\nUploading to FTP ...")
+    print("\nUploading to Google Drive ...")
     for fname in [
         "exp4_generalisation.json",
         "fig_04_01_pervocoder_eer.png",
         "fig_04_02_generalisation_scatter.png",
     ]:
-        upload(os.path.join(LOCAL_OUT, fname), fname)
+        save_to_drive(os.path.join(LOCAL_OUT, fname), fname)
+
+    # --- Sync to ensure all writes are flushed ---
+    print("\n[SYNC] Flushing file system buffers...")
+    os.sync()
+    print("[SYNC] Complete.")
 
     # ------------------------------------------------------------------
     # Final summary

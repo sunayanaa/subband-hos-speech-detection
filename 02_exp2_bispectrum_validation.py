@@ -28,9 +28,9 @@
 #                  Step 5  Estimate variance of the direct diagonal bispectrum
 #                          estimate vs frame length (128, 256, 512 ms) to
 #                          justify the 200 ms design choice
-#                  Step 6  Generate figures; save JSON; upload to FTP
+#                  Step 6  Generate figures; save JSON; upload to Google Drive
 #
-# OUTPUT FILES (uploaded to FTP PROJECT_DIR):
+# OUTPUT FILES (uploaded to Google Drive PROJECT_DIR):
 #                  exp2_bispectrum.json
 #                      Per-channel bicoherence indices per class per system,
 #                      frame-length variance analysis results
@@ -47,7 +47,7 @@
 #                      vs frame length (128/256/512 ms), justifies 200 ms
 #
 # GPU Required : NO
-# Dependencies : numpy, scipy, matplotlib, soundfile, librosa, tqdm, ftplib
+# Dependencies : numpy, scipy, matplotlib, soundfile, librosa, tqdm
 #
 # Change Log   :
 #   v1.0  2026-06-03  Initial version
@@ -62,7 +62,6 @@
 import os
 import json
 import time
-import ftplib
 import shutil
 import zipfile
 import warnings
@@ -84,12 +83,8 @@ from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
-# --- FTP Configuration ---
-FTP_HOST        = "173.225.103.246"
-FTP_PORT        = 2121
-FTP_USER        = "guest"
-FTP_PASS        = "guest"
-FTP_PROJECT_DIR = "."
+# --- Google Drive Configuration ---
+PROJECT_DIR = "/content/drive/MyDrive/paper/Subband_Kurtosis/"  # Persistent storage
 
 # --- Paths ---
 DRIVE_DIR       = "/content/drive/MyDrive/datasets"
@@ -152,30 +147,42 @@ plt.rcParams.update({
 })
 
 # =============================================================================
-# SECTION 1 — FTP Helpers
+# SECTION 1 — Google Drive Helpers
 # =============================================================================
 
-def get_ftp():
-    ftp = ftplib.FTP()
-    ftp.connect(FTP_HOST, FTP_PORT, timeout=30)
-    ftp.login(FTP_USER, FTP_PASS)
-    if FTP_PROJECT_DIR != ".":
-        ftp.cwd(FTP_PROJECT_DIR)
-    return ftp
+def ensure_project_dir():
+    """Create project directory in Google Drive if it doesn't exist."""
+    os.makedirs(PROJECT_DIR, exist_ok=True)
 
-def upload(local_path, remote_name, retries=3):
+def save_to_drive(local_path, remote_name, retries=3):
+    """Copy a local file to Google Drive project folder."""
+    ensure_project_dir()
+    dest_path = os.path.join(PROJECT_DIR, remote_name)
     for attempt in range(retries):
         try:
-            ftp = get_ftp()
-            with open(local_path, "rb") as f:
-                ftp.storbinary(f"STOR {remote_name}", f)
-            ftp.quit()
-            print(f"  FTP ✓ {remote_name}")
+            shutil.copy2(local_path, dest_path)
+            print(f"  [DRIVE OK] {local_path}  →  {dest_path}")
             return
         except Exception as e:
-            print(f"  FTP attempt {attempt+1} failed: {e}")
+            print(f"  [DRIVE FAIL] attempt {attempt+1}: {e}")
             time.sleep(2)
-    print(f"  FTP FAILED: {remote_name}")
+    print(f"  [DRIVE FAILED] {remote_name}")
+
+def load_from_drive(remote_name, local_path):
+    """Copy a file from Google Drive project folder to local path."""
+    ensure_project_dir()
+    src_path = os.path.join(PROJECT_DIR, remote_name)
+    if os.path.exists(src_path):
+        try:
+            shutil.copy2(src_path, local_path)
+            print(f"  [DRIVE OK] {src_path}  →  {local_path}")
+            return True
+        except Exception as e:
+            print(f"  [DRIVE FAIL] copy from {src_path}: {e}")
+            return False
+    else:
+        print(f"  [DRIVE MISSING] {src_path} not found")
+        return False
 
 # =============================================================================
 # SECTION 2 — Dataset Preparation
@@ -673,7 +680,7 @@ def fig_frame_length_variance(variance_results, out_path):
 
 def main():
     print("=" * 65)
-    print("02_exp2_bispectrum_validation_v01.py")
+    print("02_exp2_bispectrum_validation.py")
     print("Experiment 2 — Bispectrum Estimation and Bicoherence Analysis")
     print("=" * 65)
 
@@ -811,9 +818,9 @@ def main():
         os.path.join(LOCAL_OUT_DIR, "fig_02_04_frame_length_variance.png"))
 
     # ------------------------------------------------------------------
-    # Step 8: Upload all to FTP
+    # Step 8: Upload all to Google Drive
     # ------------------------------------------------------------------
-    print("\nUploading to FTP ...")
+    print("\nUploading to Google Drive ...")
     for fname in [
         "exp2_bispectrum.json",
         "fig_02_01_bispectrum_bonafide.png",
@@ -821,7 +828,12 @@ def main():
         "fig_02_03_bicoherence_boxplot.png",
         "fig_02_04_frame_length_variance.png",
     ]:
-        upload(os.path.join(LOCAL_OUT_DIR, fname), fname)
+        save_to_drive(os.path.join(LOCAL_OUT_DIR, fname), fname)
+
+    # --- Sync to ensure all writes are flushed ---
+    print("\n[SYNC] Flushing file system buffers...")
+    os.sync()
+    print("[SYNC] Complete.")
 
     print("\n" + "=" * 65)
     print("Experiment 2 complete.")

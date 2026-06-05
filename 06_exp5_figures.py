@@ -5,11 +5,11 @@
 #                (Subband HOS Robustness under Codec/Channel Distortion).
 #
 # INPUT:
-#                  - results_exp5.json  (downloaded from FTP or local)
+#                  - results_exp5.json  (downloaded from Google Drive or local)
 #                    Fields per condition: hos_eer, lfcc_eer, hos_deg,
 #                    lfcc_deg, hos_tdcf, label
 #
-# OUTPUT FIGURES (saved locally + uploaded to FTP):
+# OUTPUT FIGURES (saved locally + uploaded to Google Drive):
 #                  fig_06_01_eer_vs_mp3.png
 #                      EER (%) vs MP3 bitrate for HOS-XGBoost and LFCC-GMM
 #                  fig_06_02_eer_vs_opus.png
@@ -26,7 +26,7 @@
 #                      per condition, annotated, regime boundaries marked
 #
 # GPU Required : NO
-# Dependencies : matplotlib, numpy, json, ftplib (stdlib)
+# Dependencies : matplotlib, numpy, json
 #
 # Change Log   :
 #   v1.0  2026-06-03  Initial version
@@ -41,7 +41,7 @@
 import os
 import json
 import time
-import ftplib
+import shutil
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -49,11 +49,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
 
-# --- FTP Configuration ---
-FTP_HOST        = "173.225.103.246"
-FTP_PORT        = 2121
-FTP_USER        = "guest"
-FTP_PASS        = "guest"
+# --- Google Drive Configuration ---
+PROJECT_DIR = "/content/drive/MyDrive/paper/Subband_Kurtosis/"  # Persistent storage
 
 # --- Paths ---
 LOCAL_DIR  = "/content/exp5_figures"
@@ -85,48 +82,58 @@ C_TEL   = '#43A047'  # green
 C_COMBO = '#FB8C00'  # orange
 
 # =============================================================================
-# SECTION 1 — FTP Helpers
+# SECTION 1 — Google Drive Helpers
 # =============================================================================
 
-def get_ftp():
-    ftp = ftplib.FTP()
-    ftp.connect(FTP_HOST, FTP_PORT, timeout=30)
-    ftp.login(FTP_USER, FTP_PASS)
-    return ftp
+def ensure_project_dir():
+    """Create project directory in Google Drive if it doesn't exist."""
+    os.makedirs(PROJECT_DIR, exist_ok=True)
 
-def upload(local_path: str, remote_name: str, retries: int = 3):
+def save_to_drive(local_path: str, remote_name: str, retries: int = 3):
+    """Copy a local file to Google Drive project folder."""
+    ensure_project_dir()
+    dest_path = os.path.join(PROJECT_DIR, remote_name)
     for attempt in range(retries):
         try:
-            ftp = get_ftp()
-            with open(local_path, "rb") as f:
-                ftp.storbinary(f"STOR {remote_name}", f)
-            ftp.quit()
-            print(f"  FTP upload OK: {remote_name}")
+            shutil.copy2(local_path, dest_path)
+            print(f"  Drive upload OK: {remote_name}")
             return
         except Exception as e:
-            print(f"  FTP attempt {attempt+1} failed: {e}")
+            print(f"  Drive attempt {attempt+1} failed: {e}")
             time.sleep(2)
-    print(f"  FTP upload FAILED: {remote_name}")
+    print(f"  Drive upload FAILED: {remote_name}")
+
+def load_from_drive(remote_name: str, local_path: str) -> bool:
+    """Copy a file from Google Drive project folder to local path."""
+    ensure_project_dir()
+    src_path = os.path.join(PROJECT_DIR, remote_name)
+    if os.path.exists(src_path):
+        try:
+            shutil.copy2(src_path, local_path)
+            print(f"  Drive download OK: {remote_name}")
+            return True
+        except Exception as e:
+            print(f"  Drive download failed: {e}")
+            return False
+    else:
+        print(f"  Drive file not found: {remote_name}")
+        return False
 
 def download_results() -> dict:
-    """Download results_exp5.json from FTP."""
+    """Download results_exp5.json from Google Drive."""
     local = os.path.join(LOCAL_DIR, "results_exp5.json")
     # Try local first
     if os.path.exists(local):
         print("Loading results from local file.")
         with open(local) as f:
             return json.load(f)
-    # Download from FTP
-    print("Downloading results_exp5.json from FTP ...")
-    try:
-        ftp = get_ftp()
-        with open(local, "wb") as f:
-            ftp.retrbinary("RETR results_exp5.json", f.write)
-        ftp.quit()
+    # Download from Google Drive
+    print("Downloading results_exp5.json from Google Drive ...")
+    if load_from_drive("results_exp5.json", local):
         with open(local) as f:
             return json.load(f)
-    except Exception as e:
-        raise RuntimeError(f"Could not load results_exp5.json: {e}")
+    else:
+        raise RuntimeError("Could not load results_exp5.json from Drive or local.")
 
 # =============================================================================
 # SECTION 2 — Data Preparation
@@ -190,7 +197,7 @@ def save_and_upload(fig, fname: str):
     fig.savefig(path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved: {fname}")
-    upload(path, fname)
+    save_to_drive(path, fname)
 
 # =============================================================================
 # SECTION 3 — Figure 1: EER vs MP3 Bitrate
@@ -468,8 +475,12 @@ def fig_regime_scatter(results: dict):
 
 def main():
     print("=" * 60)
-    print("06_exp5_figures_v01.py — Generating Experiment 5 figures")
+    print("06_exp5_figures.py — Generating Experiment 5 figures")
     print("=" * 60)
+
+    # Mount Google Drive
+    from google.colab import drive
+    drive.mount('/content/drive')
 
     results = download_results()
     print(f"Loaded results for {len(results)} conditions: "
@@ -493,8 +504,13 @@ def main():
     print("[6/6] Regime scatter plot ...")
     fig_regime_scatter(results)
 
+    # --- Sync to ensure all writes are flushed ---
+    print("\n[SYNC] Flushing file system buffers...")
+    os.sync()
+    print("[SYNC] Complete.")
+
     print("\n" + "=" * 60)
-    print("All 6 figures saved and uploaded to FTP.")
+    print("All 6 figures saved and uploaded to Google Drive.")
     print(f"Local dir: {LOCAL_DIR}")
     print("=" * 60)
 

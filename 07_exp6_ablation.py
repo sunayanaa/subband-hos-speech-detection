@@ -9,7 +9,7 @@
 #                training XGBoost on feature subsets and evaluating on the
 #                clean eval set and the MP3-32kbps distorted eval set.
 #
-# INPUT (downloaded from FTP):
+# INPUT (downloaded from Google Drive):
 #                  hos_features_train.h5          — 25,380 × 2,496
 #                  hos_features_eval_clean.h5     — 71,237 × 2,496
 #                  hos_features_eval_mp3_032.h5   — 5,000  × 2,496
@@ -32,15 +32,15 @@
 #                  V7: Full feature set              (2496 dims) — reference
 #
 #                PIPELINE:
-#                  Step 1  Download HDF5 files from FTP
+#                  Step 1  Download HDF5 files from Google Drive
 #                  Step 2  Parse protocols
 #                  Step 3  Load all three HDF5 files into memory
 #                  Step 4  For each variant: build index mask, subset features,
 #                          train XGBoost, evaluate on clean + MP3-32, record EER
 #                  Step 5  Generate figures and save JSON
-#                  Step 6  Upload all outputs to FTP
+#                  Step 6  Upload all outputs to Google Drive
 #
-# OUTPUT FILES (uploaded to FTP PROJECT_DIR):
+# OUTPUT FILES (uploaded to Google Drive PROJECT_DIR):
 #                  exp6_ablation.json
 #                      Per-variant EER (clean + MP3-32), feature dims,
 #                      degradation ratio per variant
@@ -52,7 +52,7 @@
 #                      Visual table of all ablation results
 #
 # GPU Required : NO
-# Dependencies : numpy, scipy, matplotlib, h5py, xgboost, tqdm, ftplib
+# Dependencies : numpy, scipy, matplotlib, h5py, xgboost, tqdm
 #
 # Change Log   :
 #   v1.0  2026-06-03  Initial version
@@ -67,7 +67,7 @@
 import os
 import json
 import time
-import ftplib
+import shutil
 import warnings
 import numpy as np
 from sklearn.metrics import roc_curve
@@ -81,12 +81,8 @@ from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
-# --- FTP Configuration ---
-FTP_HOST        = "173.225.103.246"
-FTP_PORT        = 2121
-FTP_USER        = "guest"
-FTP_PASS        = "guest"
-FTP_PROJECT_DIR = "."
+# --- Google Drive Configuration ---
+PROJECT_DIR = "/content/drive/MyDrive/paper/Subband_Kurtosis/"  # Persistent storage
 
 # --- Paths ---
 DRIVE_TRAIN_PROTO = ("/content/drive/MyDrive/datasets/"
@@ -189,32 +185,29 @@ C_MP3   = '#B71C1C'
 C_REF   = '#FF8F00'   # reference variant (V7 full)
 
 # =============================================================================
-# SECTION 1 — FTP Helpers
+# SECTION 1 — Google Drive Helpers
 # =============================================================================
 
-def get_ftp():
-    ftp = ftplib.FTP()
-    ftp.connect(FTP_HOST, FTP_PORT, timeout=30)
-    ftp.login(FTP_USER, FTP_PASS)
-    if FTP_PROJECT_DIR != ".":
-        ftp.cwd(FTP_PROJECT_DIR)
-    return ftp
+def ensure_project_dir():
+    """Create project directory in Google Drive if it doesn't exist."""
+    os.makedirs(PROJECT_DIR, exist_ok=True)
 
-def upload(local_path, remote_name, retries=3):
+def save_to_drive(local_path, remote_name, retries=3):
+    """Copy a local file to Google Drive project folder."""
+    ensure_project_dir()
+    dest_path = os.path.join(PROJECT_DIR, remote_name)
     for attempt in range(retries):
         try:
-            ftp = get_ftp()
-            with open(local_path, "rb") as f:
-                ftp.storbinary(f"STOR {remote_name}", f)
-            ftp.quit()
-            print(f"  FTP ✓ {remote_name}")
+            shutil.copy2(local_path, dest_path)
+            print(f"  Drive ✓ {remote_name}")
             return
         except Exception as e:
-            print(f"  FTP attempt {attempt+1} failed: {e}")
+            print(f"  Drive attempt {attempt+1} failed: {e}")
             time.sleep(2)
-    print(f"  FTP FAILED: {remote_name}")
+    print(f"  Drive FAILED: {remote_name}")
 
-def download_from_ftp(remote_name, local_path, validate_h5=False):
+def load_from_drive(remote_name, local_path, validate_h5=False):
+    """Copy a file from Google Drive project folder to local path."""
     if os.path.exists(local_path):
         if validate_h5:
             try:
@@ -228,13 +221,28 @@ def download_from_ftp(remote_name, local_path, validate_h5=False):
         else:
             print(f"Local found: {remote_name}. Skipping download.")
             return
-    print(f"Downloading {remote_name} from FTP ...")
-    ftp = get_ftp()
-    with open(local_path, "wb") as f:
-        ftp.retrbinary(f"RETR {remote_name}", f.write)
-    ftp.quit()
-    print(f"Downloaded: {remote_name}  "
-          f"({os.path.getsize(local_path)/1e6:.1f} MB)")
+    
+    ensure_project_dir()
+    src_path = os.path.join(PROJECT_DIR, remote_name)
+    if os.path.exists(src_path):
+        try:
+            shutil.copy2(src_path, local_path)
+            print(f"  Drive ✓ {remote_name}")
+            size_mb = os.path.getsize(local_path) / 1e6
+            print(f"Downloaded: {remote_name} ({size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"  Drive FAIL: copy from {src_path}: {e}")
+    else:
+        print(f"  Drive MISSING: {remote_name} not found")
+
+def list_drive_files():
+    """List files in the Google Drive project directory."""
+    ensure_project_dir()
+    try:
+        return [f for f in os.listdir(PROJECT_DIR) if os.path.isfile(os.path.join(PROJECT_DIR, f))]
+    except Exception as e:
+        print(f"  Drive could not list files: {e}")
+        return []
 
 # =============================================================================
 # SECTION 2 — Protocol Parsing
@@ -328,14 +336,8 @@ def run_variant(variant_name, idx_array, n_dims, description,
                 eval_set=[(X_tr, y_train)],
                 verbose=False)
         clf.save_model(model_path)
-        # Upload model checkpoint to FTP
-        try:
-            ftp = get_ftp()
-            with open(model_path, "rb") as f:
-                ftp.storbinary(f"STOR {os.path.basename(model_path)}", f)
-            ftp.quit()
-        except Exception as e:
-            print(f"    FTP model upload failed: {e}")
+        # Upload model checkpoint to Drive
+        save_to_drive(model_path, os.path.basename(model_path))
 
     # Score
     sc_clean = clf.predict_proba(X_cl)[:, 1]
@@ -566,7 +568,7 @@ def fig_ablation_summary_table(results_list, out_path):
 
 def main():
     print("=" * 65)
-    print("06_exp6_ablation_v01.py")
+    print("07_exp6_ablation.py")
     print("Experiment 6 — Ablation Study and Feature Contribution")
     print("=" * 65)
 
@@ -575,7 +577,7 @@ def main():
     drive.mount('/content/drive')
 
     # ------------------------------------------------------------------
-    # Step 1: Download HDF5 files from FTP
+    # Step 1: Download HDF5 files from Google Drive
     # ------------------------------------------------------------------
     h5_train = os.path.join(LOCAL_DIR, "hos_features_train.h5")
     h5_clean = os.path.join(LOCAL_DIR, "hos_features_eval_clean.h5")
@@ -583,9 +585,19 @@ def main():
     ckpt_dir = os.path.join(LOCAL_DIR, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    download_from_ftp("hos_features_train.h5",        h5_train, validate_h5=True)
-    download_from_ftp("hos_features_eval_clean.h5",   h5_clean, validate_h5=True)
-    download_from_ftp("hos_features_eval_mp3_032.h5", h5_mp3,   validate_h5=True)
+    print("\nChecking for HDF5 files on Drive...")
+    drive_files = list_drive_files()
+
+    for (remote_name, local_path) in [
+        ("hos_features_train.h5", h5_train),
+        ("hos_features_eval_clean.h5", h5_clean),
+        ("hos_features_eval_mp3_032.h5", h5_mp3),
+    ]:
+        if remote_name in drive_files:
+            load_from_drive(remote_name, local_path, validate_h5=True)
+        else:
+            print(f"[ERROR] {remote_name} not found on Drive.")
+            sys.exit(1)
 
     # ------------------------------------------------------------------
     # Step 2: Parse protocols
@@ -653,7 +665,7 @@ def main():
         with open(results_path, 'w') as f:
             json.dump({'experiment': 'Exp6_Ablation',
                        'variants': all_results}, f, indent=2)
-        upload(results_path, "exp6_ablation.json")
+        save_to_drive(results_path, "exp6_ablation.json")
 
     # ------------------------------------------------------------------
     # Step 5: Print final summary
@@ -699,16 +711,21 @@ def main():
         os.path.join(LOCAL_DIR, "fig_06_03_ablation_summary_table.png"))
 
     # ------------------------------------------------------------------
-    # Step 7: Upload all outputs to FTP
+    # Step 7: Upload all outputs to Google Drive
     # ------------------------------------------------------------------
-    print("\nUploading to FTP ...")
+    print("\nUploading to Google Drive ...")
     for fname in [
         "exp6_ablation.json",
         "fig_06_01_ablation_eer_bar.png",
         "fig_06_02_ablation_degradation.png",
         "fig_06_03_ablation_summary_table.png",
     ]:
-        upload(os.path.join(LOCAL_DIR, fname), fname)
+        save_to_drive(os.path.join(LOCAL_DIR, fname), fname)
+
+    # --- Sync to ensure all writes are flushed ---
+    print("\n[SYNC] Flushing file system buffers...")
+    os.sync()
+    print("[SYNC] Complete.")
 
     print("\n" + "=" * 65)
     print("Experiment 6 complete.")
@@ -717,4 +734,5 @@ def main():
 
 # =============================================================================
 if __name__ == "__main__":
+    import sys
     main()
